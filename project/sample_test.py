@@ -1,10 +1,11 @@
 # coding=utf-8
 
-import typing
-from docx import Document
-import csv
-from lekit.File.Core import get_extension_name, tool_file
-from lekit.Str.Core import *
+from typing                     import *
+from lekit.File.Core            import tool_file
+from lekit.Str.Core             import UnWrapper
+from docx.document              import Document as DocumentObject
+from project.Core                       import ProjectConfig
+from lekit.LLM.LangChain.llama  import *
 
 defined_names = {
     "Scene":    "Scene", 
@@ -13,57 +14,72 @@ defined_names = {
     "Expect":   "Expect"
 }
 
-def generate_test_cases(doc_texts:str) -> typing.List[str]:
-    #return [
-    #    {"场景或模块": "用户登录", "操作": "输入正确的用户名和密码", "预期状况": "登录成功"},
-    #    {"场景或模块": "用户登录", "操作": "输入错误的用户名和密码", "预期状况": "显示错误消息"},
-    #]
-    
-    pass
+class DocxRuntime:
+    def __init__(self, file:Union[str, tool_file]):
+        self.file = file if isinstance(file, tool_file) else tool_file(file_path=UnWrapper(file))
+        self.open()
+        
+    def open(self):
+        if self.file.get_extension() == 'docx':
+            self.file.close()
+            self.docx:DocumentObject = self.file.load_as_docx()
+        else:
+            raise ValueError("Not a docx file")
+        
+    def read_all(self) -> List[str]:
+        result:List[str] = []
+        current = self.docx
+        for paragraph in current.paragraphs:
+            result.append(paragraph.text)
+        self.data = result
+        return result
 
-def read_word_document(file_path) -> str:
-    doc = Document(file_path)
-    full_text = []
-    for para in doc.paragraphs:
-        full_text.append(para.text)
-    return '\n'.join(full_text)
+WebCodeType = Literal['html', 'js', 'css', 'json', 'xml', 'yaml', 'yml', 'markdown', 'md', 'txt']
+URL_or_Marking_Type = str
 
-def write_test_cases_to_word(test_cases, output_file_path):
-    doc = Document()
-    table = doc.add_table(rows=1, cols=3)
-    hdr_cells = table.rows[0].cells
-    hdr_cells[0].text = r'当前场景或模块'
-    hdr_cells[1].text = r'当前操作'
-    hdr_cells[2].text = r'预期状况'
-    
-    for test_case in test_cases:
-        row_cells = table.add_row().cells
-        row_cells[0].text = test_case["场景或模块"]
-        row_cells[1].text = test_case["操作"]
-        row_cells[2].text = test_case["预期状况"]
-    
-    doc.save(output_file_path)
-    
-def write_test_cases_to_csv(test_cases, output_file_path):
-    with open(output_file_path, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(["当前场景或模块", "当前操作", "预期状况"])
-        for test_case in test_cases:
-            writer.writerow([test_case["场景或模块"], test_case["操作"], test_case["预期状况"]])
+SampleTest_KeysTemplate = {
+    "Scene":"current scene",
+    "Module":"current module",
+    "Operation":"current operation",
+    "Expect":"expected result"
+}
 
-def sample_test_result_build(file_path:str='input.docx', output_file_path:str='output.csv'):
-    # 读取设计文档
-    design_document_text = read_word_document(file_path)
-    
-    # 使用LLM生成测试用例
-    test_cases = generate_test_cases(design_document_text)
-    
-    # 将测试用例写入
-    suffix = get_extension_name(output_file_path)
-    if suffix == 'csv':
-        write_test_cases_to_csv(test_cases, output_file_path)
-    elif suffix == 'docx':
-        write_test_cases_to_word(test_cases, output_file_path)
-    else:
-        raise ValueError(f"unsupport file type/suffix: {suffix}")
+SampleTest_LLm_Model_Path_FindKey = r"SampleTest_LLM_Model"
+SampleTest_LLm_Model_SystemPrompt = '''
+You are a software testing engineer who is completing a software testing task.
+You will then receive a design document for the software, and you will need to get all the test cases you should have based on this document.
+You need to output a list of test cases in a specific format.
+This list is made up of json, which has four key-value pairs, which are current scene, current module, current operation, and expected result.
+The format is as follows.
 
+{
+    "Datas":[
+'''+str(SampleTest_KeysTemplate)+'''
+    ]
+}
+
+In particular, please translate the output into the language corresponding to the document.
+'''
+
+class SampleTestCore:
+    def __init__(self, file:Union[str, tool_file]):
+        self.docx_runtime:  DocxRuntime                                         = DocxRuntime(file)
+        self.web_codes:     Dict[WebCodeType, Dict[URL_or_Marking_Type,str]]    = {}
+        
+    def run(self):
+        current_config:ProjectConfig = ProjectConfig()
+        stats = True
+        if SampleTest_LLm_Model_Path_FindKey not in current_config or current_config[SampleTest_LLm_Model_Path_FindKey] == "set you model":
+            current_config.LogPropertyNotFound(SampleTest_LLm_Model_Path_FindKey)
+            current_config[SampleTest_LLm_Model_Path_FindKey] = "set you model"
+            stats = False
+            
+        if stats is False:
+            current_config.save_properties()
+            return
+            
+        llm_core:light_llama_core       = light_llama_core(tool_file(current_config[SampleTest_LLm_Model_Path_FindKey]),
+            make_system_prompt(SampleTest_LLm_Model_SystemPrompt))
+        for text in self.docx_runtime.read_all():
+            print(llm_core(text))
+        
