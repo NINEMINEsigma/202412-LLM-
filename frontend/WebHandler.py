@@ -12,9 +12,17 @@ CurrentSampleTestCore:      SampleTestCore                          = {}
 def run_main_core_with_design_documentation(
     source_file:tool_file,
     result_file:tool_file
-    ):
+    ) -> bool:
     config = ProjectConfig()
-    result_file.try_create_parent_path()
+    with global_lock_guard():
+        if result_file.is_dir():
+            raise ValueError("result_file is a directory")
+
+        config.LogMessage(
+            f'''run_main_core_with_design_documentation(source_file={source_file}, result_file={result_file})'''
+        )
+        result_file.try_create_parent_path()
+        CurrentSampleTestCore.run(source_file, result_file.get_dir())
 
 class project_backend_handler(light_handler):
     def __init__(self, request, client_address, server):
@@ -23,16 +31,22 @@ class project_backend_handler(light_handler):
     def callback(self, handler:light_handler, type:str):
         return self.virsual_callback(handler, type)
 
-    def main_branch(self) -> bytes:
+    def init_branch(self) -> Tuple[ProjectConfig, List[bytes]]:
         config = ProjectConfig()
         # 解析 multipart/form-data
         boundary = self.headers['Content-Type'].split('boundary=')[-1]
         parts = self.temp_result.split(b'--' + boundary.encode())
+        return config, parts
+
+    # post
+    def main_branch(self) -> bytes:
+        config, parts = self.init_branch()
 
         for part in parts:
             if b'Content-Disposition' in part and f'name="{InternalDesignDocumentationFieldName}"'.encode("utf-8") in part:
                 # 提取文件名
                 filename = part.split(b'filename="')[-1].split(b'"')[0]
+                # 连续的两个CRLF换行符用于分割文件的内容, '--'标记文件的末尾
                 file_content = part.split(b'\r\n\r\n')[-1].rstrip(b'--')
 
                 # 保存文件
@@ -66,6 +80,17 @@ class project_backend_handler(light_handler):
 
                 return response
         return None
+    def config_branch(self, curpath:str) -> bytes:
+        config, parts = self.init_branch()
+
+        for part in parts:
+            if b'Content-Disposition' in part and f'name="{InternalDesignDocumentationFieldName}"'.encode("utf-8") in part:
+                # 提取文件名
+                filename = part.split(b'filename="')[-1].split(b'"')[0]
+                # 连续的两个CRLF换行符用于分割文件的内容, '--'标记文件的末尾
+                file_content = part.split(b'\r\n\r\n')[-1].rstrip(b'--')
+
+        return None
 
     def virsual_callback(self, handler:light_handler, type:str):
         config = ProjectConfig()
@@ -74,6 +99,8 @@ class project_backend_handler(light_handler):
         elif type == 'post':
             if self.path == '/main':
                 return self.main_branch()
+            elif self.path[len("/config/"):] == "/config/":
+                return self.config_branch(self.path[(len("/config/")+1):])
             return None
         elif type == 'put':
             config.LogWarning("put operator current is empty")
