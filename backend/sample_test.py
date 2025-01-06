@@ -7,6 +7,7 @@ from lekit.Visual.WordCloud     import make_word_cloud
 from docx.document              import Document as DocumentObject
 from backend.Internal           import *
 from lekit.LLM.LangChain.llama  import *
+from tqdm                       import tqdm
 
 class DocxRuntime:
     def __init__(self, file:Union[str, tool_file]):
@@ -65,6 +66,7 @@ SampleTest_KeysTemplate = {
 
 SampleTest_LLM_Model_Path_FindKey   = r"SampleTest_LLM_Model"
 SampleTest_LLM_Model_Max_Ctx_Len    = r"SampleTest_LLM_n_ctx"
+SampleTest_LLM_Ignore_2Short        = r"SampleTest_Ignore_Length"
 SampleTest_LLM_Model_SystemPrompt   = '''
 你现在是一名软件测试工作员，正在完成一项软件测试任务。
 你接下来将收到该软件的设计文档(可能是的一部分)，并获取生成基于此内容的测试用例。
@@ -77,6 +79,7 @@ SampleTest_LLM_Model_SystemPrompt   = '''
     ]
 }
 
+这样就生成了一个样例，实际上可能本段不需要生成样例或需要生成多个样例。
 你的输出需要与获取的文档主要使用的语言相同, 如果你不能完成判断则使用utf8编码的中文输出
 '''
 SampleTest_LLM_Model_Check_Rebulid = r"SampleTest_LLM_Rebulid"
@@ -86,25 +89,20 @@ class SingleSample(BaseModel):
     current_module:     str = Field(description="The current module of this sample")
     current_operation:  str = Field(description="The current operation of this sample")
     current_expect:     str = Field(description="The current expect of this sample")
-    has_sample_to_create:bool = Field(description="Current input has sample must to create?")
+class SampleList(BaseModel):
+    datas:  List[SingleSample] = Field(description="Samples")
 
-@FunctionTool("sample_create_function", args_schema=SingleSample)
+@FunctionTool("sample_create_function", args_schema=SampleList)
 def sample_create(
-    current_scene:      str,
-    current_module:     str,
-    current_operation:  str,
-    current_expect:     str,
-    has_sample_to_create:bool
+    datas:  List[SingleSample]
     ):
-    """create one sample."""
-    if has_sample_to_create is False:
-        return None
-    return {
-        "Scene":      current_scene,
-        "Module":     current_module,
-        "Operation":  current_operation,
-        "Expect":     current_expect
-    }
+    """create samples."""
+    return [{
+        "Scene":      item.current_scene,
+        "Module":     item.current_module,
+        "Operation":  item.current_operation,
+        "Expect":     item.current_expect
+    } for item in datas]
 
 class SampleTestCore:
     def __init__(self):
@@ -118,12 +116,19 @@ class SampleTestCore:
         current_config.LogMessage("Sample Test Model Currently Rebuild")
         stats = True
         target_n_ctx = 1024
+        target_ignore_when_text_length_is_too_short = 5
         if SampleTest_LLM_Model_Path_FindKey not in current_config or current_config[SampleTest_LLM_Model_Path_FindKey] == "set you model":
             current_config.LogPropertyNotFound(SampleTest_LLM_Model_Path_FindKey)
             current_config[SampleTest_LLM_Model_Path_FindKey] = "set you model"
             stats = False
         if SampleTest_LLM_Model_Max_Ctx_Len not in current_config:
             current_config.LogWarning(f"{SampleTest_LLM_Model_Max_Ctx_Len} is not found, current using default[{target_n_ctx}]")
+        else:
+            target_n_ctx = current_config[SampleTest_LLM_Model_Max_Ctx_Len]
+        if SampleTest_LLM_Ignore_2Short not in current_config:
+            current_config.LogWarning(f"{SampleTest_LLM_Ignore_2Short} is not found, current using default[{target_ignore_when_text_length_is_too_short}]")
+        else:
+            target_ignore_when_text_length_is_too_short = current_config[SampleTest_LLM_Ignore_2Short]
 
         if stats is False:
             current_config.save_properties()
@@ -145,6 +150,7 @@ class SampleTestCore:
             sample_create,
             "sample_create_function",
             )
+        self.__ignore_when_text_length_is_too_short = target_ignore_when_text_length_is_too_short
         return True
 
     def run_with_list_of_str(
@@ -172,8 +178,16 @@ class SampleTestCore:
         # Build up auto runtime path
         assets_target_file = output_dir|InternalResultOutputFileName
         result_container = []
-        for text in input_list_text:
-            result_container.append(self.functioncall(text)["sample_create_function"])
+        for index in tqdm(range(len(input_list_text))):
+            text = input_list_text[index]
+            if len(text) < self.__ignore_when_text_length_is_too_short:
+                continue
+            try:
+                result_container.extend(self.functioncall(text)["sample_create_function"])
+            except BaseException as ex:
+                current_config.LogError(f"{ex}")
+                current_config.LogError(f"{traceback.format_exc()}")
+                current_config.LogError(f"current text is <{text}>")
 
         assets_target_file.data={
             "Datas":        result_container,
