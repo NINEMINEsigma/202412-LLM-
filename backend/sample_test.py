@@ -1,13 +1,7 @@
 # coding=utf-8
-
-from typing                     import *
-from lekit.File.Core            import tool_file
-from lekit.Str.Core             import UnWrapper as UnWrapper2Str, word_segmentation
 from lekit.Visual.WordCloud     import make_word_cloud
 from docx.document              import Document as DocumentObject
 from backend.Internal           import *
-from lekit.LLM.LangChain.llama  import *
-from tqdm                       import tqdm
 
 class DocxRuntime:
     def __init__(self, file:Union[str, tool_file]):
@@ -104,11 +98,18 @@ def sample_create(
         "Expect":     item.current_expect
     } for item in datas]
 
-class SampleTestCore:
-    def __init__(self):
-        self.web_codes:     Dict[WebCodeType, Dict[URL_or_Marking_Type, str]]   = {}
-        self.llm_core:      light_llama_core                                    = None
-        self.functioncall:  light_llama_functioncall                            = None
+class SampleTestCore(lvref[light_llama_core]):
+    @property
+    def llm_core(self) -> light_llama_core:
+        return self.ref_value
+    @llm_core.setter
+    def llm_core(self, value:light_llama_core):
+        self.ref_value = value
+    web_codes:     Dict[WebCodeType, Dict[URL_or_Marking_Type, str]]   = {}
+    functioncall:  light_llama_functioncall                            = None
+    __ignore_when_text_length_is_too_short: int                        = None
+    def __init__(self, llama:Optional[light_llama_core]=None):
+        super().__init__(llama)
 
     def build_model(self) -> bool:
         # Check config and get target property
