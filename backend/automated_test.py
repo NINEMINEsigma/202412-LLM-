@@ -6,8 +6,8 @@ AutomatedTest_LLM_Model_Max_Ctx_Len    = r"AutomatedTest_LLM_n_ctx"
 AutomatedTest_LLM_Model_SystemPrompt        = r'''
 You are a web search assistant that helps people find information. 
 User will you give you a question.
- Your task is to answer as faithfully as you can. 
- While answering think step-bystep and justify your answer.
+Your task is to answer as faithfully as you can. 
+While answering think step-bystep and justify your answer.
 
 You have access to the following tools:
 ...
@@ -15,14 +15,7 @@ You have access to the following tools:
 '''
 AutomatedTest_LLM_Model_Check_Rebulid = r"AutomatedTest_LLM_Rebulid"
 
-class AutomatedTestCore(lvref[light_llama_core]):
-    @property
-    def llm_core(self) -> light_llama_core:
-        return self.ref_value
-    @llm_core.setter
-    def llm_core(self, value:light_llama_core):
-        self.ref_value = value
-        return value
+class AutomatedTestCore(BasicTestCore):
     functioncall:   light_llama_functioncall                            = None
     target_url:     str                                                 = "www.bing.com"
 
@@ -30,6 +23,7 @@ class AutomatedTestCore(lvref[light_llama_core]):
         super().__init__(llama)
         self.target_url = url
 
+    @override
     def build_model(self) -> bool:
         # Check config and get target property
         current_config:ProjectConfig = ProjectConfig()
@@ -72,22 +66,13 @@ class AutomatedTestCore(lvref[light_llama_core]):
 
     def run_with_list_of_str(
         self,
-        input_list_text:    Sequence[str],
+        AutoRuntimePath:    Optional[tool_file],
         output_dir:         tool_file
         ):
         # Check config and get target property
         # Init current environment
         current_config: ProjectConfig   = ProjectConfig()
-        stats:          bool            = True
-
-        if self.llm_core is None or (
-            AutomatedTest_LLM_Model_Check_Rebulid in current_config and current_config[AutomatedTest_LLM_Model_Check_Rebulid] is True
-            ):
-            stats = self.build_model()
-            current_config[AutomatedTest_LLM_Model_Check_Rebulid] = False
-            current_config.save_properties()
-
-        if stats is False:
+        if self.check_model(AutomatedTest_LLM_Model_Check_Rebulid, current_config) is False:
             return None
 
         self.llm_core.clear_hestroy()
@@ -111,27 +96,20 @@ class AutomatedTestCore(lvref[light_llama_core]):
         }
         return assets_target_file
 
-
+    @override
     def run(
         self,
-        input_file: tool_file,
-        output_dir: tool_file
+        AutoRuntimePath:    Optional[tool_file],
+        output_dir:         tool_file
         ):
-        # Check config and get target property
-        # Init current environment and build docx
-        docx_runtime:  DocxRuntime                                         = DocxRuntime(input_file)
-        list_text = docx_runtime.buildup_result()
-        word_cloud_file = docx_runtime.render_wordcloud(output_dir)
-
         # run core
-        assets_target_file = self.run_with_list_of_str(list_text, output_dir)
-        assets_target_file.data["word_cloud"] = UnWrapper2Str(word_cloud_file)
-
-        # Save result
-        assets_target_file.open('w')
-        assets_target_file.save()
-        assets_target_file.close()
-        return assets_target_file
+        with self.run_with_list_of_str(AutoRuntimePath, output_dir) as assets_target_file:
+            if assets_target_file is None:
+                return None
+            # Save result
+            assets_target_file.save()
+            return assets_target_file
+        raise NotImplementedError("Should not reach here")
 
     
     

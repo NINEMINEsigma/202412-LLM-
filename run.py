@@ -15,5 +15,5 @@ def read_out():
         print(data)
 
 if __name__ == '__main__':
-    #run()
-    read_out()
+    run()
+    #read_out()

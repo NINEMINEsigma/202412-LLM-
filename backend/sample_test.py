@@ -3,6 +3,13 @@ from lekit.Visual.WordCloud     import make_word_cloud
 from docx.document              import Document as DocumentObject
 from backend.Internal           import *
 
+meaningless_words = [
+    "的","地","得","是","否","对","错",
+    ",",".","!","?","，","。","！","？","：","；","“","”","‘","’","《","》","（","）","【","】",
+]
+
+SampleTest_LLM_Paragraph_Length     = r"SampleTest_LLM_Paragraph_Length"
+
 class DocxRuntime:
     def __init__(self, file:Union[str, tool_file]):
         self.file:  tool_file       = file if isinstance(file, tool_file) else tool_file(file_path=UnWrapper2Str(file))
@@ -32,19 +39,32 @@ class DocxRuntime:
 
         words:List[Tuple[str, int]] = []
         for key, value in self.words.items():
-            words.append((key, value))
+            if key not in meaningless_words:
+                words.append((key, value))
         result = assets|"wordcould.html"
         make_word_cloud("wordcould", words).render(UnWrapper2Str(result))
         return result
 
     def buildup_result(self) -> List[str]:
+        current_config:ProjectConfig = ProjectConfig()
         self.clear_words_config()
         result:List[str] = []
         current = self.docx
+        
+        buffer:str          = ""
+        buffer_length:int   = 1024
+        if SampleTest_LLM_Paragraph_Length in current_config:
+            buffer_length = current_config[SampleTest_LLM_Paragraph_Length]
+        else:
+            current_config.LogWarning(f"{SampleTest_LLM_Paragraph_Length} is not found, current using default[{buffer_length}]")
         for paragraph in current.paragraphs:
             current_text = paragraph.text
-            result.append(current_text)
-            self.append_words_config(current_text)
+            if len(buffer)+len(current_text)<buffer_length:
+                buffer += "\n"+current_text
+            else:
+                self.append_words_config(buffer)
+                result.append(buffer)
+                buffer = current_text
         self.data = result
         return result
 
@@ -62,8 +82,8 @@ SampleTest_LLM_Model_Path_FindKey   = r"SampleTest_LLM_Model"
 SampleTest_LLM_Model_Max_Ctx_Len    = r"SampleTest_LLM_n_ctx"
 SampleTest_LLM_Ignore_2Short        = r"SampleTest_Ignore_Length"
 SampleTest_LLM_Model_SystemPrompt   = '''
-你现在是一名软件测试工作员，正在完成一项软件测试任务。
-你接下来将收到该软件的设计文档(可能是的一部分)，并获取生成基于此内容的测试用例。
+你现在是一名软件测试员，正在完成一项软件测试任务。
+你接下来将收到该软件的设计文档，并获取生成基于此内容的测试用例。
 你需要以特定格式输出测试用例列表。
 格式如下。
 
@@ -73,18 +93,24 @@ SampleTest_LLM_Model_SystemPrompt   = '''
     ]
 }
 
-这样就生成了一个样例，实际上可能本段不需要生成样例或需要生成多个样例。
-你的输出需要与获取的文档主要使用的语言相同, 如果你不能完成判断则使用utf8编码的中文输出
+这样就生成了一个样例，你需要按需生成一个或多个用例, 在你认为不需要生成时则返回空列表。
+你输出的文字需要与获取的文档主要使用的语言相同, 如果你不能完成判断则使用utf8编码的中文输出
 '''
 SampleTest_LLM_Model_Check_Rebulid = r"SampleTest_LLM_Rebulid"
 
 class SingleSample(BaseModel):
-    current_scene:      str = Field(description="The current scene of this sample")
-    current_module:     str = Field(description="The current module of this sample")
-    current_operation:  str = Field(description="The current operation of this sample")
-    current_expect:     str = Field(description="The current expect of this sample")
+    '''
+    这是一个单独的样例
+    '''
+    current_scene:      str = Field(description="当前所处的场景The current scene of this sample")
+    current_module:     str = Field(description="当前所处的模块The current module of this sample")
+    current_operation:  str = Field(description="即将进行的操作The current operation of this sample")
+    current_expect:     str = Field(description="操作后预期结果The current expect of this sample")
 class SampleList(BaseModel):
-    datas:  List[SingleSample] = Field(description="Samples")
+    '''
+    这是一个样例列表, 如果不需要生成用例则为空, 否则将包含多个测试用例
+    '''
+    datas:  List[SingleSample] = Field(description="测试用例列表The list of sample")
 
 @FunctionTool("sample_create_function", args_schema=SampleList)
 def sample_create(
@@ -98,19 +124,17 @@ def sample_create(
         "Expect":     item.current_expect
     } for item in datas]
 
-class SampleTestCore(lvref[light_llama_core]):
-    @property
-    def llm_core(self) -> light_llama_core:
-        return self.ref_value
-    @llm_core.setter
-    def llm_core(self, value:light_llama_core):
-        self.ref_value = value
+class SampleTestCore(BasicTestCore):
     web_codes:     Dict[WebCodeType, Dict[URL_or_Marking_Type, str]]   = {}
     functioncall:  light_llama_functioncall                            = None
     __ignore_when_text_length_is_too_short: int                        = None
+    
+    error_map:     Dict[str, Any]                                      = {}
+    
     def __init__(self, llama:Optional[light_llama_core]=None):
         super().__init__(llama)
 
+    @override
     def build_model(self) -> bool:
         # Check config and get target property
         current_config:ProjectConfig = ProjectConfig()
@@ -139,9 +163,8 @@ class SampleTestCore(lvref[light_llama_core]):
         # Build llm core
         self.llm_core:light_llama_core       = light_llama_core(
             ChatLlamaCpp(
-                model_path=UnWrapper2Str(tool_file(current_config[SampleTest_LLM_Model_Path_FindKey])),
+                model_path              = UnWrapper2Str(tool_file(current_config[SampleTest_LLM_Model_Path_FindKey])),
                 n_ctx=target_n_ctx,
-
                 ),
             init_message                = make_system_prompt(SampleTest_LLM_Model_SystemPrompt),
             is_record_result_to_history = False,
@@ -162,16 +185,7 @@ class SampleTestCore(lvref[light_llama_core]):
         # Check config and get target property
         # Init current environment
         current_config: ProjectConfig   = ProjectConfig()
-        stats:          bool            = True
-
-        if self.llm_core is None or (
-            SampleTest_LLM_Model_Check_Rebulid in current_config and current_config[SampleTest_LLM_Model_Check_Rebulid] is True
-            ):
-            stats = self.build_model()
-            current_config[SampleTest_LLM_Model_Check_Rebulid] = False
-            current_config.save_properties()
-
-        if stats is False:
+        if self.check_model(SampleTest_LLM_Model_Check_Rebulid, current_config) is False:
             return None
 
         self.llm_core.clear_hestroy()
@@ -182,20 +196,23 @@ class SampleTestCore(lvref[light_llama_core]):
         for index in tqdm(range(len(input_list_text))):
             text = input_list_text[index]
             if len(text) < self.__ignore_when_text_length_is_too_short:
+                print_colorful(ConsoleFrontColor.YELLOW,text, is_reset=True)
                 continue
+            else:
+                print_colorful(ConsoleFrontColor.GREEN,text,is_reset=True)
             try:
                 result_container.extend(self.functioncall(text)["sample_create_function"])
             except BaseException as ex:
-                current_config.LogError(f"{ex}")
-                current_config.LogError(f"{traceback.format_exc()}")
-                current_config.LogError(f"current text is <{text}>")
+                self.error_map[text]=ex
+                current_config.LogError(f"Error when running \"{text[:20]}...\" : {ex}")
+            os.system('cls') or os.system('clear')
 
         assets_target_file.data={
             "Datas":        result_container,
         }
         return assets_target_file
 
-
+    @override
     def run(
         self,
         input_file: tool_file,
@@ -208,14 +225,14 @@ class SampleTestCore(lvref[light_llama_core]):
         word_cloud_file = docx_runtime.render_wordcloud(output_dir)
 
         # run core
-        assets_target_file = self.run_with_list_of_str(list_text, output_dir)
-        assets_target_file.data["word_cloud"] = UnWrapper2Str(word_cloud_file)
-
-        # Save result
-        assets_target_file.open('w')
-        assets_target_file.save()
-        assets_target_file.close()
-        return assets_target_file
+        with self.run_with_list_of_str(list_text, output_dir) as assets_target_file:
+            if assets_target_file is None:
+                return None
+            assets_target_file.data["word_cloud"] = UnWrapper2Str(word_cloud_file)
+            # Save result
+            assets_target_file.save()
+            return assets_target_file
+        raise NotImplementedError("Should not reach here")
 
 
 
