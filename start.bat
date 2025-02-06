@@ -1,2 +1,1 @@
-conda activate lekit_env
-python run.py
+..\..\..\Windows\Python\Conda\miniconda3\envs\lekit_env\python run.py

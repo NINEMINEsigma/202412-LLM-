@@ -17,12 +17,8 @@ InternalResultOutputFileName = "AutoRuntimePath.json"
 # In WebHandler.py, control main branch's key-field name of input file
 InternalDesignDocumentationFieldName = "project"
 
-class ProjectConfig(GlobalConfig):
-    def __init__(self, load:bool = True):
-        super().__init__(ProjectDataDir, True, load=load)
-        self.print_func = lambda str_: print_colorful(ConsoleFrontColor.RED, str_, is_reset=True)
-
 class BasicTestCore(lvref[light_llama_core], ABC):
+    config:     GlobalConfig = None
     @property
     def llm_core(self) -> light_llama_core:
         return self.ref_value
@@ -34,7 +30,7 @@ class BasicTestCore(lvref[light_llama_core], ABC):
     @abstractmethod
     def build_model(self) -> bool:
         raise NotImplementedError("build_model is not implemented")
-    def check_model(self, rebuild_key:str, current_config:ProjectConfig) -> bool:
+    def check_model(self, rebuild_key:str, current_config:GlobalConfig) -> bool:
         # Check config and get target property
         # Init current environment
         stats:          bool            = True
@@ -48,6 +44,7 @@ class BasicTestCore(lvref[light_llama_core], ABC):
     @abstractmethod
     def run(
         self,
+        config:     GlobalConfig,
         input_file: tool_file,
         output_dir: tool_file
         ) -> Optional[Any]:
